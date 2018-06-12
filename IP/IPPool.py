@@ -1,27 +1,23 @@
-#! usr/bin/evn python3
+# !/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import time
 import requests, re, random, os
-# import json
-
-'''一个简单的代理IP池，代理IP以文本存储。实例化一个代理池，使用get_ip()方法可以随机返回一个字典，包括协议类型和IP端口。
-   如{'http': 'http://1.2.3.4:4'},可直接用于requests的proxies参数。
-   或者使用get_ips()方法一次返回一个字典列表。
-   目前只有使用了一个在线代理网址的数据，所以协议类型还有IP较少。
-   如果IPPool文件夹下没有IP.txt文件，可以运行一次IPPool.py，或者直接创建如下的文本文件保存为IP.txt：
-   1.2.3.4：5
-   2.3.4.5：6
-   ...
-   '''
+from threading import Thread
+from queue import Queue, Empty
 
 class IPPool():
-    def __init__(self):
+    '''一个小型IP池，十几个可用的HTTP代理，实例化时可以自行更换源地址（可能需要更改一下提取规则）。
+       主要提供两个方法，get_ip()和get_ips()，前者随机返回一个HTTP代理的字典，形式类似于：
+       {'http':'http://host:port'}
+       后者返回一个字典的列表。所有IP数据在更换了源地址或者每30分钟自动更新一次。'''
+    default_url = 'http://www.66ip.cn/nmtq.php?getnum=100&isp=0&anonymoustype=0&start=&ports=&export=&ipaddress=&area=1&proxytype=0&api=66ip'
+    def __init__(self, url = default_url):
         self.headers = {'User-Agent':'Mozilla/5.0'}
-        self.url = 'http://www.66ip.cn/nmtq.php?getnum=&isp=0&anonymoustype=0&start=&ports=&export=&ipaddress=&area=0&proxytype=0&api=66ip'
-        self.iplist = []
-        self.file_path = os.path.join(os.path.dirname(__file__), 'IP.txt')
-        
-    def _pagedownloader(self):
+        self.url = url
+        self.file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'IP.txt')
+
+    def _page_downloader(self):
         try:
             response = requests.get(self.url, headers=self.headers)
             response.raise_for_status()
@@ -29,50 +25,113 @@ class IPPool():
             html = response.text
             return html
         except:
-            print('链接不可用，请更换链接！')
+            print('代理IP提取链接已失效，请更换链接！')
+            return
 
-    def _ip_parse(self, html): # 生成器用于提取IP
-        html_list = html.split('<br />')
-        for html_cut in html_list:
-            ip = re.search(r'((25[0-5]|2[0-4]\d|1\d{2}|\d{1,2})\.){3}(25[0-5]|2[0-4]\d|1\d{2}|\d{1,2}):\d+', html_cut)
-            if ip:
-                yield ip.group()
+    def _page_parse(self, html):    #提取页面IP信息，可能需要更改split（）参数
+        if html:
+            try:
+                html_list = html.split('<br />')
+                for html_cut in html_list:
+                    if html_cut:
+                        ip = re.search(r'((25[0-5]|2[0-4]\d|1\d{2}|\d?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|\d?\d):\d+', html_cut)
+                        if ip:
+                            yield ip.group()
+            except:
+                print('此页面没有可提取到的IP地址！请检查链接是否是代理界面链接')
+                return
+        else:
+            print('链接不可用！')
+            return
 
-    def _ip_test(self, ip): # 用于测试IP是否可用
+    def _ip_test(self, ip):    #用于测试提取的IP保证代理可用
+        proxies_ip = {'http':'http://%s' % ip}
         try:
-            response = requests.get('http://www.baidu.com', headers=self.headers, timeout=5)
-            response.raise_for_status()
-            return ip
+            rep = requests.get('http://www.baidu.com', proxies=proxies_ip, timeout=5)
+            if rep.status_code == 200:
+                return True
         except:
-            return None
+            return False
 
-    def ip_refresh(self): # 用于更新IP数据
-        html = self._pagedownloader()
-        with open(self.file_path, 'w') as file:
-            for ip in self._ip_parse(html):
-                result = self._ip_test(ip)
-                if result:
-                   file.write('%s\n' % result)
+    def _tested_queue(self, ip, q):    # 多线程加快测试速度
+        if self._ip_test(ip):
+            q.put(ip)
 
+    def _storage(self, q, f):
+        while True:
+            try:
+                f.write(q.get(timeout=3)+'\n')
+            except (Empty,ValueError):
+                return
+
+    def _refresh(self):    #刷新IP文档，存储通过测试的IP
+        q = Queue()
+        with open(self.file_path, 'w') as f:
+            html = self._page_downloader()
+            ip_generator = self._page_parse(html)
+            t1 = Thread(target=self._storage, args=(q, f))
+            t1.start()
+            for ip in ip_generator:
+                t = Thread(target=self._tested_queue, args=(ip, q))
+                t.start()
+            t1.join()
+        print('更新完成！')
+
+    @property
     def get_ip(self):
-        try:
-            with open(self.file_path, 'r') as file:
-                iplist = file.readlines()
-                return {'http':'http://%s' % random.choice(iplist).strip()}
-        except:
-            print('检查IPPool文件夹下是否有IP.txt文件，没有请先运行IPPool.py，更新IP文件。')
+        '''返回为一个类似{'http':'http://1.2.3.4:5'}的字典'''
 
+        if self.url != IPPool.default_url:
+            print('源地址改变更新代理IP！')
+            self._refresh()
+            with open(self.file_path, 'r') as f:
+                ips_list = f.readlines()
+                return {'http':'http://%s' % random.choice(ips_list).strip()}
+        elif os.path.isfile(self.file_path) and os.path.getsize(self.file_path) and int(time.time()-os.path.getmtime(self.file_path))<1800:
+            with open(self.file_path, 'r') as f:
+                ips_list = f.readlines()
+                return {'http':'http://%s' % random.choice(ips_list).strip()}
+        else:
+            print('正在更新代理IP！')
+            self._refresh()
+            while True:
+                if os.path.isfile(self.file_path) and os.path.getsize(self.file_path):
+                    with open(self.file_path, 'r') as f:
+                        ips_list = f.readlines()
+                        return {'http':'http://%s' % random.choice(ips_list).strip()}
+
+    @property
     def get_ips(self):
-        try:
-            with open(self.file_path, 'r') as file:
-                iplist = file.readlines()
-                for ip in iplist:
-                    self.iplist.append({'http':'http://%s' % random.choice(iplist).strip()})
-                return self.iplist
-        except:
-             print('检查IPPool文件夹下是否有IP.txt文件，没有请先运行IPPool.py，更新IP文件。')
+        '''返回一个如{'http':'http://1.2.3.4:5'}字典列表'''
 
+        ips_list = []
+        if self.url != IPPool.default_url:
+            print('源地址改变，正在更新代理IP！')
+            with open(self.file_path, 'r') as f:
+                ip_list = f.readlines()
+                for ip in ip_list:
+                    ips_list.append({'http': 'http://%s' % ip.strip()})
+                    return ips_list
+        elif os.path.isfile(self.file_path) and os.path.getsize(self.file_path) and int(time.time()-os.path.getctime(self.file_path))%1800!=0:
+            with open(self.file_path, 'r') as f:
+                ip_list = f.readlines()
+                for ip in ip_list:
+                    ips_list.append({'http':'http://%s'%ip.strip()})
+                return ips_list
+        else:
+            print('正在更新代理IP！')
+            self._refresh()
+            while True:
+                if os.path.isfile(self.file_path) and os.path.getsize(self.file_path):
+                    with open(self.file_path, 'r') as f:
+                        ip_list = f.readlines()
+                        for ip in ip_list:
+                            ips_list.append({'http':'http://%s' % ip.strip()})
+                        return ips_list
 if __name__ == '__main__':
     ip = IPPool()
-    for i in range(10):
-        print(ip.get_ip())
+    while True:
+        proxy = ip.get_ip
+        if proxy:
+            print(proxy)
+            break
