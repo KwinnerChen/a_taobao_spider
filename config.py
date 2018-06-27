@@ -1,20 +1,25 @@
-#! usr/bin/evn python3
-# -*- coding: utf-8 -*-
-
 # 爬取规则配置，字典形式，为提取数据的正则表达式
 PARSING_RULES = {
-    '手机' : {
-                'title':'"title":"(.*?)"',
-                'price':'"price":"([\d\.]*)"',
-                'summary':'"tag":"(.*?)"',
-             }
-}
+    '手机' : 
+    {
+        'title':r'"title":"(.*?)"', 
+        'price':r'"price":"([\d\.]*)"',
+        'summary':r'"tag":"(.*?)"',
+        },
+        }
 
+# mongodb结构
+DB_STRUCTOR = {
+    'dbname': 'taobao',
+    'col_name': 'cellphone',
+}
 # 页面分割规则
 HTML_SPLIT_RULE = '"cat":"1512"'
                  
 # 构造搜索链接
-BASE_URL = 'https://s.taobao.com/search?spm=a230r.1.0.0.7bc16fbeQSLoH5&{0}&imgfile=&ie=utf8&p4ppushleft=1%2C48&cps=yes&app=vproduct&cd=false&v=auction&tab=all&vlist=1&bcoffset=3&ntoffset=3&s={1}'
+'https://s.taobao.com/search?q=%E6%89%8B%E6%9C%BA&imgfile=&commend=all&ssid=s5-e&search_type=item&sourceId=tb.index&spm=a21bo.2017.201856-taobao-item.1&ie=utf8&initiative_id=tbindexz_20170306&p4ppushleft=5%2C48&s=48'
+BASE_URL = 'https://s.taobao.com/search?{0}&imgfile=&commend=all&ssid=s5-e&search_type=item&sourceId=tb.index&spm=a21bo.2017.201856-taobao-item.1&ie=utf8&initiative_id=tbindexz_20170306&p4ppushleft=5%2C48&s={1}'
+
 EXTENDED_URL = '&p4ppushleft=5%2C48&s='
 
 # User-Agent池
